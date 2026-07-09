@@ -1,11 +1,12 @@
 import { Hono } from "hono";
 import { html } from "hono/html";
 import type { Env } from "./types";
-import { TestSession } from "./session";
 
 // Re-export the DO class so the runtime can find it from `main` (wrangler.jsonc
 // binds class_name "TestSession").
-export { TestSession };
+
+// biome-ignore lint/performance/noBarrelFile: needed for cloudflare
+export { TestSession } from "./session";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -33,7 +34,7 @@ app.get("/", async (c) => {
   // Materialize the DO for this token (DOs are lazy until first fetch).
   await stub.fetch(`https://do/init?token=${encodeURIComponent(token)}`);
 
-  const origin = new URL(c.req.url).origin;
+  const { origin } = new URL(c.req.url);
   const endpoint = `${origin}/micropub/${token}`;
   const sessionUrl = `${origin}/client/${token}`;
 

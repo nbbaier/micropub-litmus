@@ -28,7 +28,7 @@ export class TestSession extends DurableObject<Env> {
         const existing = await this.ctx.storage.get<SessionMeta>("meta");
         if (!existing) {
           const token = url.searchParams.get("token") ?? "";
-          const meta: SessionMeta = { token, createdAt: Date.now() };
+          const meta: SessionMeta = { createdAt: Date.now(), token };
           await this.ctx.storage.put("meta", meta);
           return Response.json({ created: true, meta });
         }
@@ -39,7 +39,7 @@ export class TestSession extends DurableObject<Env> {
       // lands on the correct DO instance and can read its own state.
       case "/ping": {
         const meta = await this.ctx.storage.get<SessionMeta>("meta");
-        return Response.json({ ok: true, meta: meta ?? null });
+        return Response.json({ meta: meta ?? null, ok: true });
       }
 
       default:

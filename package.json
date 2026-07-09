@@ -1,21 +1,25 @@
 {
   "name": "micropub-litmus",
+  "type": "module",
   "version": "0.1.0",
   "description": "Cloudflare-native Micropub conformance tester (client-test half)",
   "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit",
-    "cf-typegen": "wrangler types"
-  },
   "dependencies": {
     "hono": "^4.6.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.2",
     "@cloudflare/workers-types": "^4.20250101.0",
-    "typescript": "^5.7.0",
+    "typescript": "^7.0.0",
+    "ultracite": "7.9.3",
     "wrangler": "^4.107.0"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "cf-typegen": "wrangler types",
+    "check": "ultracite check",
+    "fix": "ultracite fix"
   }
 }

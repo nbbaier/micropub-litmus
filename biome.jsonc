@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "extends": ["ultracite/biome/core", "ultracite/biome/vitest"],
+  "linter": {
+    "rules": {
+      "suspicious": {
+        // Biome's built-in type inference mis-types `new URL(req.url).pathname`
+        // and flags `switch (url.pathname)` cases as unreachable (false
+        // positive — an explicitly-typed `string` switch passes). That routing
+        // pattern is the backbone of the TestSession DO and every later slice,
+        // so disable the rule until Biome's inference handles `URL.pathname`.
+        "noUnnecessaryConditions": "off"
+      }
+    }
+  }
+}

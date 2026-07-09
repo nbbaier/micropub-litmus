@@ -7,6 +7,6 @@ export interface Env {
 
 /** DO storage: meta value (spec §4 storage schema). */
 export interface SessionMeta {
-  token: string;
   createdAt: number;
+  token: string;
 }
