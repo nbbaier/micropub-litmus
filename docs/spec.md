@@ -24,7 +24,7 @@ A Cloudflare-native Micropub conformance tester. v1 ports the **client-test half
 
 ## Working conventions
 
-Maintain `implementation-notes.md` at the repo root throughout the build. It is an append-only log, not documentation — terse entries, newest at the bottom of each section.
+Maintain `docs/implementation-notes.md` throughout the build. It is an append-only log, not documentation — terse entries, newest at the bottom of each section.
 
 **On any deviation from this spec:** pick the more conservative option, log it, and continue. Do not stop to ask unless the deviation invalidates a locked scope decision (v1 = client-test half only, no D1, no reports, stub IndieAuth).
 

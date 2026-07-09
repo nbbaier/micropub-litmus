@@ -14,4 +14,8 @@ Uses the **canonical** five-role vocabulary (`needs-triage`, `needs-info`, `read
 
 ### Domain docs
 
-**Single-context**: one `CONTEXT.md` + `docs/adr/` at the repo root. The build also keeps an append-only `implementation-notes.md` running log that feeds ADRs. See `docs/agents/domain.md`.
+**Single-context**: one `CONTEXT.md` + `docs/adr/` at the repo root. The build also keeps an append-only `docs/implementation-notes.md` running log that feeds ADRs. See `docs/agents/domain.md`.
+
+### Build tracking
+
+The v1 build is driven from `docs/spec.md` (decision-complete) and tracked as a **wayfinder execution map**: GitHub issue [#1](https://github.com/nbbaier/micropub-litmus/issues/1). Tickets are build slices (`wayfinder:task`), one per session, wired with native blocking to follow spec §12 build order. Continue with `/wayfinder #1` — it claims the next frontier ticket. Maintain the append-only `docs/implementation-notes.md` while building.

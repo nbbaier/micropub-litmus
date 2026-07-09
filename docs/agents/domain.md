@@ -2,13 +2,13 @@
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 
-This is a **single-context** repo: one `CONTEXT.md` + `docs/adr/` at the repo root. Alongside those durable docs, the build keeps an append-only `implementation-notes.md` running log — see "The running log vs. ADRs" below for how the two blend.
+This is a **single-context** repo: one `CONTEXT.md` + `docs/adr/` at the repo root. Alongside those durable docs, the build keeps an append-only `docs/implementation-notes.md` running log — see "The running log vs. ADRs" below for how the two blend.
 
 ## Before exploring, read these
 
 - **`CONTEXT.md`** at the repo root (the glossary / ubiquitous language), if it exists.
 - **`docs/adr/`** — read ADRs that touch the area you're about to work in.
-- **`implementation-notes.md`** at the repo root — the in-flight build log. Skim the **Deviations** and **Spec gaps** sections before working in an area; they record where the code intentionally diverges from `docs/spec.md`.
+- **`docs/implementation-notes.md`** — the in-flight build log. Skim the **Deviations** and **Spec gaps** sections before working in an area; they record where the code intentionally diverges from `docs/spec.md`.
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates `CONTEXT.md` and ADRs lazily when terms or decisions actually get resolved.
 
@@ -16,11 +16,11 @@ If any of these files don't exist, **proceed silently**. Don't flag their absenc
 
 ```
 /
-├── CONTEXT.md                 ← domain glossary (created lazily)
-├── implementation-notes.md    ← append-only build log (Deviations / Spec gaps / Discovered unknowns)
+├── CONTEXT.md                     ← domain glossary (created lazily)
 ├── docs/
-│   ├── spec.md                ← the build spec (source of intended behavior)
-│   └── adr/                   ← durable architectural decisions
+│   ├── spec.md                    ← the build spec (source of intended behavior)
+│   ├── implementation-notes.md    ← append-only build log (Deviations / Spec gaps / Discovered unknowns)
+│   └── adr/                       ← durable architectural decisions
 │       ├── 0001-....md
 │       └── 0002-....md
 └── src/
@@ -28,9 +28,9 @@ If any of these files don't exist, **proceed silently**. Don't flag their absenc
 
 ## The running log vs. ADRs
 
-`implementation-notes.md` and `docs/adr/` sit on a spectrum from **raw notes** to **durable decisions**. They are not redundant — know which one a given fact belongs in.
+`docs/implementation-notes.md` and `docs/adr/` sit on a spectrum from **raw notes** to **durable decisions**. They are not redundant — know which one a given fact belongs in.
 
-- **`implementation-notes.md`** — an append-only, in-the-moment log. Terse entries, newest at the bottom of each section, three sections:
+- **`docs/implementation-notes.md`** — an append-only, in-the-moment log. Terse entries, newest at the bottom of each section, three sections:
   - **Deviations** — spec said X, did Y instead (with the reason).
   - **Spec gaps** — spec was silent, a call was made.
   - **Discovered unknowns** — platform quirks, surprising costs, things harder/easier than assumed (fodder for v2).

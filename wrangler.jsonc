@@ -1,0 +1,30 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "micropub-litmus",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  // One DO class per session token — the TestSession IS the per-token Micropub
+  // server, ephemeral post store, and SSE fan-out hub (spec §1, §4).
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "TEST_SESSION",
+        "class_name": "TestSession"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      // SQLite storage backend — required for new DOs; the KV storage API
+      // (ctx.storage.get/put) used by the schema in spec §4 runs on it fine.
+      "new_sqlite_classes": ["TestSession"]
+    }
+  ]
+  // R2 bucket (media/*) and Alchemy IaC are wired in the deploy slice (#10),
+  // not this skeleton.
+}
