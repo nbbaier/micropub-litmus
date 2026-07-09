@@ -16,5 +16,6 @@ coverage
 dist
 logs
 node_modules
+.wrangler
 out
 report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
