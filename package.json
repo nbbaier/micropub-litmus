@@ -12,6 +12,7 @@
     "@cloudflare/workers-types": "^4.20250101.0",
     "typescript": "^7.0.0",
     "ultracite": "7.9.3",
+    "vitest": "^4.1.10",
     "wrangler": "^4.107.0"
   },
   "scripts": {
@@ -20,6 +21,8 @@
     "typecheck": "tsc --noEmit",
     "cf-typegen": "wrangler types",
     "check": "ultracite check",
-    "fix": "ultracite fix"
+    "fix": "ultracite fix",
+    "test": "vitest run",
+    "test:watch": "vitest"
   }
 }
