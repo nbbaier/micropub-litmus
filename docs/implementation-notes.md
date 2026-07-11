@@ -34,6 +34,14 @@ bottom of each section. Re-read Deviations before starting each new slice.
   verbatim, NOT coerced. A string `type` stays a non-array (→ empty `type`) and a
   non-array property value stays as-is, so validators can reject malformed input
   (ports `_requireJSONHEntry` / `_validateJSONProperties` from `ClientTests.php`).
+- [§7 inline multipart file parts] — `parseMicropub` consumes `formData()` and is
+  the only place the uploaded `File` objects exist. Rather than dropping them
+  (which would strand the media slice — the body is already read and files can't
+  be rebuilt from `raw`), file parts are surfaced on `ParsedMicropub.files`
+  (`{ property, file }[]`, `[]` stripped from the field name). The parser does no
+  R2 work; the media slice (§7 / build order #7) uploads each file and appends the
+  URL to `canonical.properties[property]`. Additive/optional field, omitted when
+  no files — canonical stays pure text mf2. (Raised in PR #12 review.)
 
 ## Discovered unknowns
 

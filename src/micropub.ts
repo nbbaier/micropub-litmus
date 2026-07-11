@@ -16,8 +16,9 @@
  *   single-element arrays; `key[]` → arrays; `mp-*` / `access_token` / `action`
  *   / `url` are reserved and handled specially (never folded into properties).
  * - `multipart/form-data` — identical to form for text fields. File parts
- *   (`photo`/`video`/`audio` uploads) are deferred to media handling (spec §7),
- *   so non-string parts are skipped here.
+ *   (`photo`/`video`/`audio` uploads) are kept out of `properties` and surfaced
+ *   on `files` instead, so the media slice can write them to R2 and swap in URLs
+ *   (spec §7). The parser does no R2 work itself.
  *
  * Ported against `aaronpk/micropub.rocks` (`app/ClientTests.php::micropub`) for
  * the fiddly edges the spec flags as least-trustworthy sight-unseen: content-type
@@ -46,8 +47,26 @@ export interface CanonicalMicropub {
   url?: string;
 }
 
+/** An inline multipart file upload part, carried through to media handling. */
+export interface MicropubFilePart {
+  file: File;
+  /**
+   * The mf2 property the file belongs to (`photo`/`video`/`audio`), with any
+   * trailing `[]` stripped. The media slice (spec §7) uploads the file to R2 and
+   * appends the resulting URL to `canonical.properties[property]`.
+   */
+  property: string;
+}
+
 export interface ParsedMicropub {
   canonical: CanonicalMicropub;
+  /**
+   * Inline multipart file parts (`photo`/`video`/`audio` uploads). Surfaced —
+   * NOT dropped — so the media slice can write them to R2 and replace them with
+   * URLs (spec §7); the parser itself stays pure and does no R2 work. Omitted
+   * when the request carried no file parts.
+   */
+  files?: MicropubFilePart[];
   format: MicropubFormat;
   /** The raw request body, preserved verbatim for the debug dump (spec §8/§4). */
   raw: string;
@@ -78,7 +97,7 @@ export async function parseMicropub(request: Request): Promise<ParsedMicropub> {
 
   if (MULTIPART_CONTENT_TYPE.test(contentType)) {
     const form = await request.formData();
-    return { canonical: formToCanonical(form), format: "multipart", raw };
+    return { ...formToCanonical(form), format: "multipart", raw };
   }
 
   if (JSON_CONTENT_TYPE.test(contentType)) {
@@ -87,81 +106,106 @@ export async function parseMicropub(request: Request): Promise<ParsedMicropub> {
 
   // Default branch: x-www-form-urlencoded and anything unrecognized. Parse the
   // urlencoded body straight from `raw` — no second stream read needed.
-  return {
-    canonical: formToCanonical(new URLSearchParams(raw)),
-    format: "form",
-    raw,
-  };
+  return { ...formToCanonical(new URLSearchParams(raw)), format: "form", raw };
 }
 
 /**
- * Collect a form/query source into `key → string[]`, dropping non-string parts.
- * File parts (multipart uploads) are `File` objects here and are deferred to the
- * media endpoint (spec §7), so they never reach the canonical properties.
+ * Split a form/query source into text fields (`key → string[]`) and file parts.
+ * File parts are `File` objects (multipart uploads); rather than dropping them,
+ * they are collected separately so the media slice can handle them (spec §7).
+ * A `URLSearchParams` source never yields files, so `files` is empty there.
  */
-function collectFields(
-  source: URLSearchParams | FormData
-): Map<string, string[]> {
+function collectFields(source: URLSearchParams | FormData): {
+  fields: Map<string, string[]>;
+  files: MicropubFilePart[];
+} {
   const fields = new Map<string, string[]>();
+  const files: MicropubFilePart[] = [];
   for (const [key, value] of source.entries()) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const existing = fields.get(key);
-    if (existing) {
-      existing.push(value);
+    if (typeof value === "string") {
+      const existing = fields.get(key);
+      if (existing) {
+        existing.push(value);
+      } else {
+        fields.set(key, [value]);
+      }
     } else {
-      fields.set(key, [value]);
+      // File part: kept out of `properties` (which stays pure text mf2) and
+      // handed to the caller for media handling. Reserved keys are never files.
+      files.push({ file: value, property: key.replace(ARRAY_KEY_SUFFIX, "") });
     }
   }
-  return fields;
+  return { fields, files };
 }
 
 /** Apply the Micropub form→JSON algorithm to a form/multipart field source. */
-function formToCanonical(
-  source: URLSearchParams | FormData
-): CanonicalMicropub {
-  const type: string[] = [];
-  const properties: Record<string, unknown> = {};
-  const commands: Record<string, unknown> = {};
-  let action: string | undefined;
-  let url: string | undefined;
+function formToCanonical(source: URLSearchParams | FormData): {
+  canonical: CanonicalMicropub;
+  files?: MicropubFilePart[];
+} {
+  const { fields, files } = collectFields(source);
+  const acc: FormAccumulator = { commands: {}, properties: {}, type: [] };
+  for (const [rawKey, values] of fields) {
+    applyFormField(acc, rawKey, values);
+  }
+  const canonical = buildCanonical(
+    acc.type,
+    acc.properties,
+    acc.commands,
+    acc.action,
+    acc.url
+  );
+  return files.length > 0 ? { canonical, files } : { canonical };
+}
 
-  for (const [rawKey, values] of collectFields(source)) {
-    if (rawKey === RESERVED_ACCESS_TOKEN) {
-      // Auth credential, never a property (spec §6). Handled by the auth path.
-      continue;
-    }
-    const [firstValue] = values;
-    if (rawKey === RESERVED_H) {
-      if (firstValue) {
-        type.push(`h-${firstValue}`);
-      }
-      continue;
-    }
-    if (rawKey === RESERVED_ACTION) {
-      action = firstValue;
-      continue;
-    }
-    if (rawKey === RESERVED_URL) {
-      url = firstValue;
-      continue;
-    }
+/** Mutable accumulator threaded through the form→JSON field loop. */
+interface FormAccumulator {
+  action?: string;
+  commands: Record<string, unknown>;
+  properties: Record<string, unknown>;
+  type: string[];
+  url?: string;
+}
 
-    // `category[]` and `category` both normalize to the `category` property.
-    const key = rawKey.replace(ARRAY_KEY_SUFFIX, "");
-    const bucket = key.startsWith(MP_COMMAND_PREFIX) ? commands : properties;
-    const existing = bucket[key] as string[] | undefined;
-    if (existing) {
-      for (const value of values) {
-        existing.push(value);
-      }
-    } else {
-      bucket[key] = values;
+/** Route one text field into the accumulator per the form→JSON algorithm. */
+function applyFormField(
+  acc: FormAccumulator,
+  rawKey: string,
+  values: string[]
+): void {
+  if (rawKey === RESERVED_ACCESS_TOKEN) {
+    // Auth credential, never a property (spec §6). Handled by the auth path.
+    return;
+  }
+  const [firstValue] = values;
+  if (rawKey === RESERVED_H) {
+    if (firstValue) {
+      acc.type.push(`h-${firstValue}`);
     }
+    return;
+  }
+  if (rawKey === RESERVED_ACTION) {
+    acc.action = firstValue;
+    return;
+  }
+  if (rawKey === RESERVED_URL) {
+    acc.url = firstValue;
+    return;
   }
 
-  return buildCanonical(type, properties, commands, action, url);
+  // `category[]` and `category` both normalize to the `category` property.
+  const key = rawKey.replace(ARRAY_KEY_SUFFIX, "");
+  const bucket = key.startsWith(MP_COMMAND_PREFIX)
+    ? acc.commands
+    : acc.properties;
+  const existing = bucket[key] as string[] | undefined;
+  if (existing) {
+    for (const value of values) {
+      existing.push(value);
+    }
+  } else {
+    bucket[key] = values;
+  }
 }
 
 /** Structure an already-mf2 JSON body, preserving property values verbatim. */

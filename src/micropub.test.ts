@@ -229,7 +229,7 @@ describe("parseMicropub — multipart/form-data", () => {
     expect(parsed.canonical.properties.category).toEqual(["a", "b"]);
   });
 
-  it("defers file parts to media handling — they never enter properties", async () => {
+  it("keeps a file part out of properties but surfaces it on files", async () => {
     const form = new FormData();
     form.append("h", "entry");
     form.append("content", "with a photo file");
@@ -242,6 +242,35 @@ describe("parseMicropub — multipart/form-data", () => {
 
     expect(parsed.canonical.properties).not.toHaveProperty("photo");
     expect(parsed.canonical.properties.content).toEqual(["with a photo file"]);
+    expect(parsed.files).toHaveLength(1);
+    expect(parsed.files?.[0].property).toBe("photo");
+    expect(parsed.files?.[0].file.name).toBe("pic.png");
+  });
+
+  it("surfaces multiple file parts and strips [] from the file field name", async () => {
+    const form = new FormData();
+    form.append("h", "entry");
+    form.append("photo[]", new File(["a"], "one.jpg", { type: "image/jpeg" }));
+    form.append("photo[]", new File(["b"], "two.jpg", { type: "image/jpeg" }));
+
+    const parsed = await parseMicropub(multipartRequest(form));
+
+    expect(parsed.canonical.properties).not.toHaveProperty("photo");
+    expect(parsed.files?.map((f) => f.property)).toEqual(["photo", "photo"]);
+    expect(parsed.files?.map((f) => f.file.name)).toEqual([
+      "one.jpg",
+      "two.jpg",
+    ]);
+  });
+
+  it("omits files for a text-only multipart request", async () => {
+    const form = new FormData();
+    form.append("h", "entry");
+    form.append("content", "text only");
+
+    const parsed = await parseMicropub(multipartRequest(form));
+
+    expect(parsed.files).toBeUndefined();
   });
 
   it("still treats a text-valued photo field as a URL property", async () => {
