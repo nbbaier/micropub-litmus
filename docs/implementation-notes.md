@@ -42,6 +42,14 @@ bottom of each section. Re-read Deviations before starting each new slice.
   R2 work; the media slice (§7 / build order #7) uploads each file and appends the
   URL to `canonical.properties[property]`. Additive/optional field, omitted when
   no files — canonical stays pure text mf2. (Raised in PR #12 review.)
+- [§7 malformed JSON envelope] — malformed JSON syntax and invalid root, `type`,
+  or `properties` shapes retain the conservative empty canonical fallback and
+  now surface explicit `ParsedMicropub.issues`. This keeps the canonical contract
+  type-safe while ensuring validators can distinguish malformed input from a
+  valid empty value; `raw` remains the source for exact protocol error details.
+- [§7 inline multipart file allowlist] — only `photo`, `video`, and `audio` file
+  parts reach `ParsedMicropub.files`, matching the spec's supported inline media
+  properties. Unsupported and reserved file fields are never handed to R2.
 
 ## Discovered unknowns
 

@@ -176,6 +176,16 @@ describe("parseMicropub — JSON", () => {
     );
 
     expect(parsed.canonical.type).toEqual([]);
+    expect(parsed.issues).toEqual(["invalid-json-type"]);
+  });
+
+  it("reports an array containing non-string types as malformed", async () => {
+    const parsed = await parseMicropub(
+      jsonRequest({ properties: {}, type: ["h-entry", 1] })
+    );
+
+    expect(parsed.canonical.type).toEqual([]);
+    expect(parsed.issues).toEqual(["invalid-json-type"]);
   });
 
   it("preserves a non-array property value verbatim for the validator to reject", async () => {
@@ -204,12 +214,30 @@ describe("parseMicropub — JSON", () => {
     const parsed = await parseMicropub(jsonRequest("{ not valid json"));
 
     expect(parsed.canonical).toEqual({ properties: {}, type: [] });
+    expect(parsed.issues).toEqual(["invalid-json"]);
   });
 
-  it("falls back to an empty canonical when properties is missing", async () => {
+  it("reports a non-object JSON root as malformed", async () => {
+    const parsed = await parseMicropub(jsonRequest(["h-entry"]));
+
+    expect(parsed.canonical).toEqual({ properties: {}, type: [] });
+    expect(parsed.issues).toEqual(["invalid-json-root"]);
+  });
+
+  it("reports missing properties instead of silently treating them as valid", async () => {
     const parsed = await parseMicropub(jsonRequest({ type: ["h-entry"] }));
 
     expect(parsed.canonical.properties).toEqual({});
+    expect(parsed.issues).toEqual(["invalid-json-properties"]);
+  });
+
+  it("reports an array-valued properties container as malformed", async () => {
+    const parsed = await parseMicropub(
+      jsonRequest({ properties: [], type: ["h-entry"] })
+    );
+
+    expect(parsed.canonical.properties).toEqual({});
+    expect(parsed.issues).toEqual(["invalid-json-properties"]);
   });
 });
 
@@ -261,6 +289,19 @@ describe("parseMicropub — multipart/form-data", () => {
       "one.jpg",
       "two.jpg",
     ]);
+  });
+
+  it("does not surface unsupported or reserved file fields for media upload", async () => {
+    const form = new FormData();
+    form.append("h", "entry");
+    form.append("attachment", new File(["a"], "attachment.bin"));
+    form.append("access_token", new File(["secret"], "token.txt"));
+
+    const parsed = await parseMicropub(multipartRequest(form));
+
+    expect(parsed.files).toBeUndefined();
+    expect(parsed.canonical.properties).not.toHaveProperty("attachment");
+    expect(parsed.canonical.properties).not.toHaveProperty("access_token");
   });
 
   it("omits files for a text-only multipart request", async () => {

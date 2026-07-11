@@ -7,10 +7,10 @@
  *
  * The three formats and how they map:
  *
- * - `application/json` — already canonical-ish mf2 JSON. Preserved verbatim
- *   (including the `photo` alt-text object form `[{ value, alt }]`); shape
- *   validation is the validators' job, not this function's. mp-* commands,
- *   `action`, and `url` sit at the top level as siblings of `properties`.
+ * - `application/json` — already canonical-ish mf2 JSON. Property values are
+ *   preserved verbatim (including `photo` alt-text objects); malformed envelope
+ *   fields produce explicit `issues` for validators. mp-* commands, `action`,
+ *   and `url` sit at the top level as siblings of `properties`.
  * - `application/x-www-form-urlencoded` — the Micropub form→JSON algorithm
  *   (Micropub spec §3.3.1): `h=entry` → `type: ['h-entry']`; scalar fields →
  *   single-element arrays; `key[]` → arrays; `mp-*` / `access_token` / `action`
@@ -28,6 +28,14 @@
  */
 
 export type MicropubFormat = "form" | "json" | "multipart";
+
+export type MicropubNormalizationIssue =
+  | "invalid-json"
+  | "invalid-json-properties"
+  | "invalid-json-root"
+  | "invalid-json-type";
+
+export type MicropubMediaProperty = "audio" | "photo" | "video";
 
 /** Canonical mf2 view of a create request. Superset of spec §8's `{type, properties}`. */
 export interface CanonicalMicropub {
@@ -55,7 +63,7 @@ export interface MicropubFilePart {
    * trailing `[]` stripped. The media slice (spec §7) uploads the file to R2 and
    * appends the resulting URL to `canonical.properties[property]`.
    */
-  property: string;
+  property: MicropubMediaProperty;
 }
 
 export interface ParsedMicropub {
@@ -68,6 +76,8 @@ export interface ParsedMicropub {
    */
   files?: MicropubFilePart[];
   format: MicropubFormat;
+  /** Malformed JSON envelope fields retained as explicit validator input. */
+  issues?: MicropubNormalizationIssue[];
   /** The raw request body, preserved verbatim for the debug dump (spec §8/§4). */
   raw: string;
 }
@@ -101,7 +111,7 @@ export async function parseMicropub(request: Request): Promise<ParsedMicropub> {
   }
 
   if (JSON_CONTENT_TYPE.test(contentType)) {
-    return { canonical: jsonToCanonical(raw), format: "json", raw };
+    return { ...jsonToCanonical(raw), format: "json", raw };
   }
 
   // Default branch: x-www-form-urlencoded and anything unrecognized. Parse the
@@ -131,11 +141,20 @@ function collectFields(source: URLSearchParams | FormData): {
       }
     } else {
       // File part: kept out of `properties` (which stays pure text mf2) and
-      // handed to the caller for media handling. Reserved keys are never files.
-      files.push({ file: value, property: key.replace(ARRAY_KEY_SUFFIX, "") });
+      // handed to the caller for media handling only for Micropub's supported
+      // inline media properties. Unsupported and reserved file fields must not
+      // reach the R2 upload handoff.
+      const property = key.replace(ARRAY_KEY_SUFFIX, "");
+      if (isMediaProperty(property)) {
+        files.push({ file: value, property });
+      }
     }
   }
   return { fields, files };
+}
+
+function isMediaProperty(value: string): value is MicropubMediaProperty {
+  return value === "audio" || value === "photo" || value === "video";
 }
 
 /** Apply the Micropub form→JSON algorithm to a form/multipart field source. */
@@ -148,13 +167,7 @@ function formToCanonical(source: URLSearchParams | FormData): {
   for (const [rawKey, values] of fields) {
     applyFormField(acc, rawKey, values);
   }
-  const canonical = buildCanonical(
-    acc.type,
-    acc.properties,
-    acc.commands,
-    acc.action,
-    acc.url
-  );
+  const canonical = buildCanonical(acc);
   return files.length > 0 ? { canonical, files } : { canonical };
 }
 
@@ -208,32 +221,43 @@ function applyFormField(
   }
 }
 
+interface JsonNormalizationResult {
+  canonical: CanonicalMicropub;
+  issues?: MicropubNormalizationIssue[];
+}
+
 /** Structure an already-mf2 JSON body, preserving property values verbatim. */
-function jsonToCanonical(raw: string): CanonicalMicropub {
+function jsonToCanonical(raw: string): JsonNormalizationResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    parsed = null;
+    return {
+      canonical: { properties: {}, type: [] },
+      issues: ["invalid-json"],
+    };
   }
 
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { properties: {}, type: [] };
+  if (!isRecord(parsed)) {
+    return {
+      canonical: { properties: {}, type: [] },
+      issues: ["invalid-json-root"],
+    };
   }
-  const obj = parsed as Record<string, unknown>;
+  const obj = parsed;
+  const issues: MicropubNormalizationIssue[] = [];
 
-  // Preserve `type` exactly: a non-array `type` (e.g. the string "h-entry") is
-  // malformed and must stay non-conformant so validators can reject it — do NOT
-  // coerce it into an array here (that would silently "fix" a failing request).
-  const type = Array.isArray(obj[TYPE_KEY]) ? (obj[TYPE_KEY] as string[]) : [];
+  const rawType = obj[TYPE_KEY];
+  const type = isStringArray(rawType) ? rawType : [];
+  if (!isStringArray(rawType)) {
+    issues.push("invalid-json-type");
+  }
 
   const rawProperties = obj[PROPERTIES_KEY];
-  const properties: Record<string, unknown> =
-    rawProperties &&
-    typeof rawProperties === "object" &&
-    !Array.isArray(rawProperties)
-      ? { ...(rawProperties as Record<string, unknown>) }
-      : {};
+  const properties = isRecord(rawProperties) ? { ...rawProperties } : {};
+  if (!isRecord(rawProperties)) {
+    issues.push("invalid-json-properties");
+  }
 
   // In JSON, mp-* commands are top-level siblings of `properties`, not nested.
   const commands: Record<string, unknown> = {};
@@ -244,25 +268,22 @@ function jsonToCanonical(raw: string): CanonicalMicropub {
   }
 
   const action =
-    typeof obj[RESERVED_ACTION] === "string"
-      ? (obj[RESERVED_ACTION] as string)
-      : undefined;
+    typeof obj[RESERVED_ACTION] === "string" ? obj[RESERVED_ACTION] : undefined;
   const url =
-    typeof obj[RESERVED_URL] === "string"
-      ? (obj[RESERVED_URL] as string)
-      : undefined;
+    typeof obj[RESERVED_URL] === "string" ? obj[RESERVED_URL] : undefined;
 
-  return buildCanonical(type, properties, commands, action, url);
+  const canonical = buildCanonical({ action, commands, properties, type, url });
+  return issues.length > 0 ? { canonical, issues } : { canonical };
 }
 
 /** Assemble the canonical object, omitting optional fields that carry nothing. */
-function buildCanonical(
-  type: string[],
-  properties: Record<string, unknown>,
-  commands: Record<string, unknown>,
-  action: string | undefined,
-  url: string | undefined
-): CanonicalMicropub {
+function buildCanonical({
+  action,
+  commands,
+  properties,
+  type,
+  url,
+}: FormAccumulator): CanonicalMicropub {
   const canonical: CanonicalMicropub = { properties, type };
   if (Object.keys(commands).length > 0) {
     canonical.commands = commands;
@@ -274,4 +295,14 @@ function buildCanonical(
     canonical.url = url;
   }
   return canonical;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
 }
