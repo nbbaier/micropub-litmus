@@ -84,6 +84,23 @@ describe("parseMicropub — form-urlencoded", () => {
 
     expect(parsed.canonical.properties).not.toHaveProperty("access_token");
     expect(parsed.canonical.commands).toBeUndefined();
+    expect(parsed.raw).toContain("access_token=secret123");
+    expect(JSON.stringify(parsed.canonical)).not.toContain("secret123");
+  });
+
+  it("flags an access token sent in the body without exposing its value (case 106)", async () => {
+    const parsed = await parseMicropub(
+      formRequest("h=entry&content=x&access_token=secret123")
+    );
+
+    expect(parsed.accessTokenInBody).toBe(true);
+    expect(parsed.fieldArity).not.toHaveProperty("access_token");
+  });
+
+  it("omits accessTokenInBody when the token is not in the body", async () => {
+    const parsed = await parseMicropub(formRequest("h=entry&content=x"));
+
+    expect(parsed.accessTokenInBody).toBeUndefined();
   });
 
   it("lifts action and url to the top level for non-create requests", async () => {
@@ -113,12 +130,99 @@ describe("parseMicropub — form-urlencoded", () => {
     expect(parsed.raw).toBe(body);
   });
 
-  it("omits commands/action/url when the request carries none", async () => {
+  it("omits commands/action/url/update when the request carries none", async () => {
     const parsed = await parseMicropub(formRequest("h=entry&content=x"));
 
     expect(parsed.canonical.commands).toBeUndefined();
     expect(parsed.canonical.action).toBeUndefined();
     expect(parsed.canonical.url).toBeUndefined();
+    expect(parsed.canonical.update).toBeUndefined();
+  });
+});
+
+describe("parseMicropub — form field arity (scalar vs [] on the wire)", () => {
+  it("records a bare field as scalar and a bracketed one as array (cases 100/101)", async () => {
+    const parsed = await parseMicropub(
+      formRequest("h=entry&content=hello&category[]=a&category[]=b")
+    );
+
+    expect(parsed.fieldArity).toEqual({
+      category: "array",
+      content: "scalar",
+    });
+    // Canonical still coerces both to arrays per Micropub §3.3.1.
+    expect(parsed.canonical.properties.content).toEqual(["hello"]);
+    expect(parsed.canonical.properties.category).toEqual(["a", "b"]);
+  });
+
+  it("keeps a single bracketed value as array arity, not scalar (case 101)", async () => {
+    const parsed = await parseMicropub(formRequest("h=entry&category[]=solo"));
+
+    expect(parsed.fieldArity?.category).toBe("array");
+  });
+
+  it("treats a repeated bare key as scalar arity (PHP parse_str keeps the last)", async () => {
+    const parsed = await parseMicropub(
+      formRequest("h=entry&content=first&content=second")
+    );
+
+    expect(parsed.fieldArity?.content).toBe("scalar");
+    expect(parsed.canonical.properties.content).toEqual(["first", "second"]);
+  });
+
+  it("promotes a key sent both ways to array arity", async () => {
+    const parsed = await parseMicropub(
+      formRequest("h=entry&photo=https%3A%2F%2Fa.test%2F1.jpg&photo[]=b")
+    );
+
+    expect(parsed.fieldArity?.photo).toBe("array");
+  });
+
+  it("promotes to array arity regardless of which spelling came first", async () => {
+    const parsed = await parseMicropub(
+      formRequest("h=entry&photo[]=b&photo=https%3A%2F%2Fa.test%2F1.jpg")
+    );
+
+    expect(parsed.fieldArity?.photo).toBe("array");
+  });
+
+  it("records arity for mp-* commands too (they are form fields as well)", async () => {
+    const parsed = await parseMicropub(
+      formRequest(
+        "h=entry&mp-slug=a-post&mp-syndicate-to[]=https%3A%2F%2Ff.test"
+      )
+    );
+
+    expect(parsed.fieldArity).toEqual({
+      "mp-slug": "scalar",
+      "mp-syndicate-to": "array",
+    });
+  });
+
+  it("does not record arity for reserved h/action/url fields", async () => {
+    const parsed = await parseMicropub(
+      formRequest("h=entry&action=delete&url=https%3A%2F%2Fa.test%2F1")
+    );
+
+    expect(parsed.fieldArity).toBeUndefined();
+  });
+
+  it("records arity for multipart text fields, and never for JSON", async () => {
+    const form = new FormData();
+    form.append("h", "entry");
+    form.append("content", "hi");
+    form.append("category[]", "a");
+
+    const multipart = await parseMicropub(multipartRequest(form));
+    const json = await parseMicropub(
+      jsonRequest({ properties: { content: ["hi"] }, type: ["h-entry"] })
+    );
+
+    expect(multipart.fieldArity).toEqual({
+      category: "array",
+      content: "scalar",
+    });
+    expect(json.fieldArity).toBeUndefined();
   });
 });
 
@@ -168,6 +272,74 @@ describe("parseMicropub — JSON", () => {
 
     expect(parsed.canonical.action).toBe("update");
     expect(parsed.canonical.url).toBe("https://example.test/p/1");
+  });
+
+  it("carries the replace object of an update through verbatim (case 400)", async () => {
+    const parsed = await parseMicropub(
+      jsonRequest({
+        action: "update",
+        replace: { content: ["updated content here"] },
+        url: "https://example.test/p/1",
+      })
+    );
+
+    expect(parsed.canonical.update).toEqual({
+      replace: { content: ["updated content here"] },
+    });
+  });
+
+  it("carries add and delete objects of an update (cases 401/402)", async () => {
+    const parsed = await parseMicropub(
+      jsonRequest({
+        action: "update",
+        add: { category: ["foo"] },
+        delete: { category: ["bar"] },
+        url: "https://example.test/p/1",
+      })
+    );
+
+    expect(parsed.canonical.update).toEqual({
+      add: { category: ["foo"] },
+      delete: { category: ["bar"] },
+    });
+  });
+
+  it("carries a delete given as an array of property names (case 403)", async () => {
+    const parsed = await parseMicropub(
+      jsonRequest({
+        action: "update",
+        delete: ["category"],
+        url: "https://example.test/p/1",
+      })
+    );
+
+    expect(parsed.canonical.update).toEqual({ delete: ["category"] });
+  });
+
+  it("preserves a malformed update operation verbatim for the validator", async () => {
+    const parsed = await parseMicropub(
+      jsonRequest({
+        action: "update",
+        replace: { content: "not-an-array" },
+        url: "https://example.test/p/1",
+      })
+    );
+
+    expect(parsed.canonical.update).toEqual({
+      replace: { content: "not-an-array" },
+    });
+  });
+
+  it("omits update for a create and for a delete action", async () => {
+    const create = await parseMicropub(
+      jsonRequest({ properties: { content: ["x"] }, type: ["h-entry"] })
+    );
+    const del = await parseMicropub(
+      jsonRequest({ action: "delete", url: "https://example.test/p/1" })
+    );
+
+    expect(create.canonical.update).toBeUndefined();
+    expect(del.canonical.update).toBeUndefined();
   });
 
   it("does NOT coerce a string type into an array (malformed stays non-conformant)", async () => {
@@ -302,6 +474,24 @@ describe("parseMicropub — multipart/form-data", () => {
     expect(parsed.files).toBeUndefined();
     expect(parsed.canonical.properties).not.toHaveProperty("attachment");
     expect(parsed.canonical.properties).not.toHaveProperty("access_token");
+    // A *file* part named access_token is not a body token — PHP keeps uploads
+    // out of the parsed params, so `case 301` never sees it either.
+    expect(parsed.accessTokenInBody).toBeUndefined();
+  });
+
+  it("flags a multipart body access token without exposing it (case 301)", async () => {
+    const form = new FormData();
+    form.append("h", "entry");
+    form.append("access_token", "secret123");
+    form.append(
+      "photo",
+      new File(["PNG-bytes"], "pic.png", { type: "image/png" })
+    );
+
+    const parsed = await parseMicropub(multipartRequest(form));
+
+    expect(parsed.accessTokenInBody).toBe(true);
+    expect(JSON.stringify(parsed.canonical)).not.toContain("secret123");
   });
 
   it("omits files for a text-only multipart request", async () => {

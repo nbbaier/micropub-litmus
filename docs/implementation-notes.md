@@ -50,6 +50,32 @@ bottom of each section. Re-read Deviations before starting each new slice.
 - [§7 inline multipart file allowlist] — only `photo`, `video`, and `audio` file
   parts reach `ParsedMicropub.files`, matching the spec's supported inline media
   properties. Unsupported and reserved file fields are never handed to R2.
+- [§7 form field arity] — RESOLVES the earlier "§7 form scalar-vs-array"
+  deviation. `ParsedMicropub.fieldArity` (`Record<name, 'array' | 'scalar'>`,
+  form/multipart only) records how each field arrived on the wire, so the §8
+  validators can port `case 100` (`is_string($params['content'])`), `case 101`
+  (`is_array($params['category'])`) and `case 104` (`is_string($params[$prop])`)
+  without re-parsing `raw` — which was never viable for multipart. `canonical`
+  is unchanged: everything is still coerced to arrays per Micropub §3.3.1. A key
+  sent both ways (`photo=a&photo[]=b`) is `array`, matching `parse_str`. A
+  repeated bare key (`content=a&content=b`) is `scalar` with both values kept;
+  PHP would keep only the last, so a validator emulating it reads the last one.
+- [§7 access_token presence] — `access_token` stays stripped from `canonical`
+  (it is auth, never content), but `ParsedMicropub.accessTokenInBody` records
+  that the body carried one. `case 106`/`case 301` fail a client that sends the
+  token in both the body and the `Authorization` header, and cannot see it
+  otherwise. The value is never surfaced — presence is all the tests read.
+- [§7 JSON update payload] — `canonical.update` carries the top-level
+  `replace`/`add`/`delete` of a JSON update request verbatim (values stay
+  `unknown`; `delete` is an object in `case 402` and an array in `case 403`).
+  Previously these were dropped, leaving `raw` as the only source for the four
+  update validators (`case 400`–`403`), each of which reports on the exact
+  malformed shape the client sent.
+- [§7 JSON content-type detection] — the original matches `application/json`
+  with `==` (exact), so a client sending `application/json; charset=utf-8` is
+  parsed as `form` and fails `_requireJSONEncoded`. We match leniently. Charset
+  parameters are legal and common, and treating them as form-encoded is a bug in
+  the original, not a behavior worth porting.
 
 ## Discovered unknowns
 
@@ -90,3 +116,11 @@ bottom of each section. Re-read Deviations before starting each new slice.
   form fallback. `bun run test` (25 pass), `typecheck`, `check` all clean.
   Files: `src/micropub.ts`, `src/micropub.test.ts`, `package.json` (test script
   + vitest devDep). Note: slice 2 (SSE) not yet in this branch's history.
+- **Slice 3, second pass (ticket #4)** — re-read the original against the three
+  formats now that `lib/helpers.php` was fetched directly: it holds no
+  normalization at all (only `mf2_val`, a display helper that unwraps the
+  `photo` alt-text object form), confirming the earlier source-reading note.
+  The re-read found three wire-level facts canonicalization was erasing that
+  the ported validators need — field arity, `access_token` presence, and the
+  JSON update payload — all three now surfaced (see Spec gaps above). 47 vitest
+  unit tests; `test`, `typecheck`, `check` clean.

@@ -25,9 +25,30 @@
  * detection (lines ~471–540) and the reserved-key handling. The original never
  * builds a single canonical object — it validates raw params inline — so the
  * canonical `{ type, properties }` shape itself follows Micropub spec §3.3.1.
+ *
+ * Because the original validates the *raw* parsed body, three wire-level facts
+ * that canonicalization would otherwise erase are carried alongside `canonical`
+ * for the validators (spec §8) to read:
+ *
+ * - `fieldArity` — whether a form field arrived as `content=x` or `category[]=a`
+ *   (`case 100`/`101`/`104` accept only one or the other).
+ * - `accessTokenInBody` — that the body carried a token, never its value
+ *   (`case 106`/`301` fail a client that also sends the header).
+ * - `canonical.update` — the `replace`/`add`/`delete` objects of a JSON update
+ *   (`case 400`–`403` validate their exact shape).
  */
 
 export type MicropubFormat = "form" | "json" | "multipart";
+
+/**
+ * How a form/multipart text field arrived on the wire: `content=x` is `scalar`,
+ * `category[]=a` is `array`. The canonical form→JSON coercion makes both an
+ * array, but the ported validators still need the distinction — `case 100`
+ * rejects a non-string `content`, `case 101` rejects a non-array `category`,
+ * and `case 104` rejects a non-string `photo` (all read PHP's raw parsed body,
+ * where `[]` is the only thing that produces an array).
+ */
+export type MicropubFieldArity = "array" | "scalar";
 
 export type MicropubNormalizationIssue =
   | "invalid-json"
@@ -36,6 +57,19 @@ export type MicropubNormalizationIssue =
   | "invalid-json-type";
 
 export type MicropubMediaProperty = "audio" | "photo" | "video";
+
+/**
+ * The three top-level operation objects of a JSON `action: 'update'` request
+ * (Micropub §3.7), preserved verbatim. `delete` is an object of property →
+ * values when removing individual values and an array of property names when
+ * removing whole properties, so every field stays `unknown` for the validator
+ * to shape-check (ports `case 400`–`case 403` of `ClientTests.php`).
+ */
+export interface MicropubUpdatePayload {
+  add?: unknown;
+  delete?: unknown;
+  replace?: unknown;
+}
 
 /** Canonical mf2 view of a create request. Superset of spec §8's `{type, properties}`. */
 export interface CanonicalMicropub {
@@ -51,6 +85,12 @@ export interface CanonicalMicropub {
   properties: Record<string, unknown>;
   /** mf2 types, e.g. `['h-entry']`. Empty when the request declared none. */
   type: string[];
+  /**
+   * `replace`/`add`/`delete` of a JSON update request, verbatim. Omitted when
+   * the request carried none (every create, and every form-encoded request —
+   * Micropub only defines updates in JSON).
+   */
+  update?: MicropubUpdatePayload;
   /** Target post URL for an `action`. Omitted when absent. */
   url?: string;
 }
@@ -67,7 +107,21 @@ export interface MicropubFilePart {
 }
 
 export interface ParsedMicropub {
+  /**
+   * True when the request carried `access_token` as a form/multipart body
+   * field. The token value itself is never surfaced (it is auth, not content —
+   * spec §6), but its *presence* is a test subject: `case 106`/`case 301` fail
+   * a client that sends the token in both the body and the `Authorization`
+   * header. Omitted when the body carried no token.
+   */
+  accessTokenInBody?: boolean;
   canonical: CanonicalMicropub;
+  /**
+   * Wire arity of each form/multipart text field, keyed by property/command
+   * name (`[]` stripped). Omitted for JSON — there the property values are
+   * preserved verbatim, so their shape is already visible on `canonical`.
+   */
+  fieldArity?: Record<string, MicropubFieldArity>;
   /**
    * Inline multipart file parts (`photo`/`video`/`audio` uploads). Surfaced —
    * NOT dropped — so the media slice can write them to R2 and replace them with
@@ -98,6 +152,8 @@ const RESERVED_URL = "url";
 const MP_COMMAND_PREFIX = "mp-";
 const PROPERTIES_KEY = "properties";
 const TYPE_KEY = "type";
+/** Top-level operation objects of a JSON update request (Micropub §3.7). */
+const UPDATE_KEYS = ["replace", "add", "delete"] as const;
 
 export async function parseMicropub(request: Request): Promise<ParsedMicropub> {
   const contentType = request.headers.get("content-type") ?? "";
@@ -159,25 +215,53 @@ function isMediaProperty(value: string): value is MicropubMediaProperty {
 
 /** Apply the Micropub form→JSON algorithm to a form/multipart field source. */
 function formToCanonical(source: URLSearchParams | FormData): {
+  accessTokenInBody?: boolean;
   canonical: CanonicalMicropub;
+  fieldArity?: Record<string, MicropubFieldArity>;
   files?: MicropubFilePart[];
 } {
   const { fields, files } = collectFields(source);
-  const acc: FormAccumulator = { commands: {}, properties: {}, type: [] };
+  const acc: FormAccumulator = {
+    arity: {},
+    commands: {},
+    properties: {},
+    type: [],
+  };
   for (const [rawKey, values] of fields) {
     applyFormField(acc, rawKey, values);
   }
-  const canonical = buildCanonical(acc);
-  return files.length > 0 ? { canonical, files } : { canonical };
+  const parsed: {
+    accessTokenInBody?: boolean;
+    canonical: CanonicalMicropub;
+    fieldArity?: Record<string, MicropubFieldArity>;
+    files?: MicropubFilePart[];
+  } = { canonical: buildCanonical(acc) };
+  if (Object.keys(acc.arity).length > 0) {
+    parsed.fieldArity = acc.arity;
+  }
+  if (files.length > 0) {
+    parsed.files = files;
+  }
+  if (acc.accessTokenInBody) {
+    parsed.accessTokenInBody = true;
+  }
+  return parsed;
 }
 
-/** Mutable accumulator threaded through the form→JSON field loop. */
-interface FormAccumulator {
+/** The pieces `buildCanonical` assembles into a `CanonicalMicropub`. */
+interface CanonicalParts {
   action?: string;
   commands: Record<string, unknown>;
   properties: Record<string, unknown>;
   type: string[];
+  update?: MicropubUpdatePayload;
   url?: string;
+}
+
+/** Mutable accumulator threaded through the form→JSON field loop. */
+interface FormAccumulator extends CanonicalParts {
+  accessTokenInBody?: boolean;
+  arity: Record<string, MicropubFieldArity>;
 }
 
 /** Route one text field into the accumulator per the form→JSON algorithm. */
@@ -187,7 +271,9 @@ function applyFormField(
   values: string[]
 ): void {
   if (rawKey === RESERVED_ACCESS_TOKEN) {
-    // Auth credential, never a property (spec §6). Handled by the auth path.
+    // Auth credential, never a property (spec §6). Handled by the auth path —
+    // only the fact that the body carried one survives, for `case 106`/`301`.
+    acc.accessTokenInBody = true;
     return;
   }
   const [firstValue] = values;
@@ -206,8 +292,14 @@ function applyFormField(
     return;
   }
 
-  // `category[]` and `category` both normalize to the `category` property.
+  // `category[]` and `category` both normalize to the `category` property; only
+  // the bracketed spelling records `array` arity. A key sent both ways
+  // (`photo=a&photo[]=b`) is an array, matching PHP's `parse_str`, where the
+  // bracketed assignment turns the entry into an array whichever order it came.
   const key = rawKey.replace(ARRAY_KEY_SUFFIX, "");
+  if (rawKey !== key || acc.arity[key] === undefined) {
+    acc.arity[key] = rawKey === key ? "scalar" : "array";
+  }
   const bucket = key.startsWith(MP_COMMAND_PREFIX)
     ? acc.commands
     : acc.properties;
@@ -272,8 +364,34 @@ function jsonToCanonical(raw: string): JsonNormalizationResult {
   const url =
     typeof obj[RESERVED_URL] === "string" ? obj[RESERVED_URL] : undefined;
 
-  const canonical = buildCanonical({ action, commands, properties, type, url });
+  const canonical = buildCanonical({
+    action,
+    commands,
+    properties,
+    type,
+    update: collectUpdatePayload(obj),
+    url,
+  });
   return issues.length > 0 ? { canonical, issues } : { canonical };
+}
+
+/**
+ * Lift `replace`/`add`/`delete` off a JSON body verbatim — values are NOT
+ * shape-checked here, because the update validators (`case 400`–`case 403`)
+ * report on the exact malformed shape the client sent.
+ */
+function collectUpdatePayload(
+  obj: Record<string, unknown>
+): MicropubUpdatePayload | undefined {
+  const update: MicropubUpdatePayload = {};
+  let present = false;
+  for (const key of UPDATE_KEYS) {
+    if (key in obj) {
+      update[key] = obj[key];
+      present = true;
+    }
+  }
+  return present ? update : undefined;
 }
 
 /** Assemble the canonical object, omitting optional fields that carry nothing. */
@@ -282,8 +400,9 @@ function buildCanonical({
   commands,
   properties,
   type,
+  update,
   url,
-}: FormAccumulator): CanonicalMicropub {
+}: CanonicalParts): CanonicalMicropub {
   const canonical: CanonicalMicropub = { properties, type };
   if (Object.keys(commands).length > 0) {
     canonical.commands = commands;
@@ -293,6 +412,9 @@ function buildCanonical({
   }
   if (url !== undefined) {
     canonical.url = url;
+  }
+  if (update !== undefined) {
+    canonical.update = update;
   }
   return canonical;
 }
