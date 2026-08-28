@@ -51,6 +51,25 @@ bottom of each section. Re-read Deviations before starting each new slice.
   parts reach `ParsedMicropub.files`, matching the spec's supported inline media
   properties. Unsupported and reserved file fields are never handed to R2.
 
+- [§4 SSE dead-subscriber reaping] — spec sketch says "drop writers that
+  throw"; nothing throws (see Discovered unknowns), so `push()` races each
+  write against a 10s timeout and drops the writer on timeout OR error.
+  `request.signal` abort + `writer.closed` are wired as best-effort fast paths
+  (immediate reap if they ever fire in production).
+- [SSE keep-alive / reconnect] — spec silent: 15s `: keep-alive` comment frames
+  so intermediaries don't reap an idle stream, and a `retry: 2000` frame at
+  subscribe so a dropped `EventSource` reconnects in 2s.
+- [SSE timers] — heartbeat and the slice-2 scaffold publisher start on the
+  first subscriber and stop when the last one is dropped: no subscribers, no
+  work, so an idle session doesn't hold the DO open.
+- [§5 `/streaming/sub` channel id] — the query `id` is validated against
+  `^(?:client|endpoint)-[A-Za-z0-9]{1,128}$` and used verbatim as the DO name.
+  Channel name = DO name keeps the route generic for Appendix B's
+  `endpoint-<id>` half instead of re-deriving `client-<token>` in the Worker.
+- [§10 frontend] — session page still uses `hono/html` templates, not Hono JSX.
+  The live panel is ~20 lines of markup; converting the view layer belongs with
+  the test-list slice that actually needs components.
+
 ## Discovered unknowns
 
 - [DO lifecycle] — DOs are lazy: a stub obtained via `idFromName` does not
@@ -68,6 +87,25 @@ bottom of each section. Re-read Deviations before starting each new slice.
   `parseMicropub` is pure over Web-standard globals (`Request`/`FormData`/
   `URLSearchParams`), so the default node environment suffices — no
   `@cloudflare/vitest-pool-workers` needed for this slice.
+- [DO + TransformStream] — awaiting the first write before returning the SSE
+  Response DEADLOCKS: a TransformStream write only settles once something reads
+  the readable half, and nothing reads it until the Response is returned. The
+  opening frame must be fire-and-forget (`.catch()`, not `await`). Symptom is a
+  request that hangs with no response headers at all.
+- [DO + SSE disconnects are invisible] — when a subscriber goes away, workerd
+  (local `wrangler dev`) does NOT abort the DO's request signal, settle
+  `writer.closed`, or reject the next `writer.write()`. Verified by counting
+  subscribers across sequential connections: 1 → 2 → 3 → 4 with only one client
+  ever connected. Writes just queue and hang once the internal queue fills, so
+  a stalled write is the only reliable liveness signal — hence the timeout.
+  Left writers accumulating, this is what would keep a DO resident forever.
+- [drop uses `abort()`, not `close()`] — closing a stalled writer waits on the
+  same undrained queue that got it dropped; `abort()` discards it.
+- [browser verification] — `chromium --headless --dump-dom
+  --virtual-time-budget=N` never terminates on a page holding an open
+  `EventSource` (the load never completes). Driving `headless_shell` over CDP
+  (`--remote-debugging-port` + `Runtime.evaluate` on a timer) is the way to
+  assert on a live-updating panel.
 
 ---
 
@@ -90,3 +128,20 @@ bottom of each section. Re-read Deviations before starting each new slice.
   form fallback. `bun run test` (25 pass), `typecheck`, `check` all clean.
   Files: `src/micropub.ts`, `src/micropub.test.ts`, `package.json` (test script
   + vitest devDep). Note: slice 2 (SSE) not yet in this branch's history.
+- **Slice 2 (spec §12.2, §4, §9, ticket #3)** — SSE fan-out in the DO. `GET
+  /sub` returns a `text/event-stream` backed by a `TransformStream`; writers are
+  retained in an instance `Set` across requests; `publish()` frames the §9
+  `client-result` contract with a monotonic id and fans out, dropping stalled or
+  errored writers. A hardcoded publisher on a 3s timer (scaffold, deleted in
+  slice #5) proves the panel updates. Worker adds `GET /streaming/sub?id=` which
+  streams the DO Response straight through (headers, incl. `Last-Event-ID`,
+  forwarded for slice #9), and `/client/:token` now renders the live panel
+  (status line, `#result`, collapsible `#debug`) with the ported EventSource
+  wiring. Verified on `wrangler dev`: curl sees `retry:`/`: connected` then
+  `id: N` frames; two concurrent subscribers receive identical ids (fan-out);
+  sequential connect/disconnect cycles keep `subscribers` at 1 (reaping works);
+  bad channel → 400, unknown session → 404; and headless Chromium over CDP shows
+  `#result` advancing tick 45 → 48 with the debug pane filled. `bun run test`
+  (40 pass, 15 new SSE-framing tests), `typecheck`, `check` clean. Files:
+  `src/sse.ts`, `src/sse.test.ts`, `src/session.ts`, `src/index.ts`,
+  `src/types.ts`.
