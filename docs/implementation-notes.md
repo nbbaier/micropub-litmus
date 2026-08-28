@@ -82,7 +82,6 @@ bottom of each section. Re-read Deviations before starting each new slice.
   parsed as `form` and fails `_requireJSONEncoded`. We match leniently. Charset
   parameters are legal and common, and treating them as form-encoded is a bug in
   the original, not a behavior worth porting.
-
 - [§4 SSE dead-subscriber reaping] — spec sketch says "drop writers that
   throw"; nothing throws (see Discovered unknowns), so `push()` races each
   write against a 10s timeout and drops the writer on timeout OR error.
@@ -159,7 +158,7 @@ bottom of each section. Re-read Deviations before starting each new slice.
   (files deferred to media handling), and content-type detection incl. the
   form fallback. `bun run test` (25 pass), `typecheck`, `check` all clean.
   Files: `src/micropub.ts`, `src/micropub.test.ts`, `package.json` (test script
-  + vitest devDep). Note: slice 2 (SSE) not yet in this branch's history.
+  + vitest devDep). Slice 2 (SSE) landed on `main` afterwards; see below.
 - **Slice 3, second pass (ticket #4)** — re-read the original against the three
   formats now that `lib/helpers.php` was fetched directly: it holds no
   normalization at all (only `mf2_val`, a display helper that unwraps the
@@ -189,6 +188,9 @@ bottom of each section. Re-read Deviations before starting each new slice.
   sequential connect/disconnect cycles keep `subscribers` at 1 (reaping works);
   bad channel → 400, unknown session → 404; and headless Chromium over CDP shows
   `#result` advancing tick 45 → 48 with the debug pane filled. `bun run test`
-  (40 pass, 15 new SSE-framing tests), `typecheck`, `check` clean. Files:
+  (9 new SSE-framing tests), `typecheck`, `check` clean. Files:
   `src/sse.ts`, `src/sse.test.ts`, `src/session.ts`, `src/index.ts`,
   `src/types.ts`.
+- **Merge: `main` (slice 2) into the ticket #4 branch** — slices 2 and 3 now
+  coexist; no conflicts in code or in this log. 59 vitest unit tests (50
+  `micropub`, 9 `sse`); `test`, `typecheck`, `check` clean.
