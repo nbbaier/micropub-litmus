@@ -97,6 +97,19 @@ describe("parseMicropub — form-urlencoded", () => {
     expect(parsed.fieldArity).not.toHaveProperty("access_token");
   });
 
+  it("treats a bracketed access_token[] as a body token too", async () => {
+    // PHP exposes `access_token[]=x` as `$_POST['access_token']`, so the
+    // credential must be discarded and flagged, never folded into properties.
+    const parsed = await parseMicropub(
+      formRequest("h=entry&content=x&access_token[]=secret123")
+    );
+
+    expect(parsed.accessTokenInBody).toBe(true);
+    expect(parsed.canonical.properties).not.toHaveProperty("access_token");
+    expect(parsed.canonical.commands).toBeUndefined();
+    expect(parsed.fieldArity).not.toHaveProperty("access_token");
+  });
+
   it("omits accessTokenInBody when the token is not in the body", async () => {
     const parsed = await parseMicropub(formRequest("h=entry&content=x"));
 
@@ -170,20 +183,37 @@ describe("parseMicropub — form field arity (scalar vs [] on the wire)", () => 
     expect(parsed.canonical.properties.content).toEqual(["first", "second"]);
   });
 
-  it("promotes a key sent both ways to array arity", async () => {
+  it("lets the last spelling decide arity when bare comes first, [] last", async () => {
+    // PHP parse_str: `photo=a&photo[]=b` → ['b'] (the [] assignment replaces
+    // the string), so the ported case 104 sees an array.
     const parsed = await parseMicropub(
       formRequest("h=entry&photo=https%3A%2F%2Fa.test%2F1.jpg&photo[]=b")
     );
 
     expect(parsed.fieldArity?.photo).toBe("array");
+    expect(parsed.canonical.properties.photo).toEqual([
+      "https://a.test/1.jpg",
+      "b",
+    ]);
   });
 
-  it("promotes to array arity regardless of which spelling came first", async () => {
+  it("lets the last spelling decide arity when [] comes first, bare last", async () => {
+    // PHP parse_str: `category[]=foo&category=bar` → 'bar' (the scalar
+    // assignment replaces the array), so the ported case 101 rejects it.
     const parsed = await parseMicropub(
-      formRequest("h=entry&photo[]=b&photo=https%3A%2F%2Fa.test%2F1.jpg")
+      formRequest("h=entry&category[]=foo&category=bar")
     );
 
-    expect(parsed.fieldArity?.photo).toBe("array");
+    expect(parsed.fieldArity?.category).toBe("scalar");
+    expect(parsed.canonical.properties.category).toEqual(["foo", "bar"]);
+  });
+
+  it("uses wire order, not grouped order, across interleaved spellings", async () => {
+    const parsed = await parseMicropub(
+      formRequest("h=entry&category=a&category[]=b&category=c&category[]=d")
+    );
+
+    expect(parsed.fieldArity?.category).toBe("array");
   });
 
   it("records arity for mp-* commands too (they are form fields as well)", async () => {
@@ -477,6 +507,19 @@ describe("parseMicropub — multipart/form-data", () => {
     // A *file* part named access_token is not a body token — PHP keeps uploads
     // out of the parsed params, so `case 301` never sees it either.
     expect(parsed.accessTokenInBody).toBeUndefined();
+  });
+
+  it("flags a bracketed multipart access_token[] text field as a body token", async () => {
+    const form = new FormData();
+    form.append("h", "entry");
+    form.append("content", "x");
+    form.append("access_token[]", "secret123");
+
+    const parsed = await parseMicropub(multipartRequest(form));
+
+    expect(parsed.accessTokenInBody).toBe(true);
+    expect(parsed.canonical.properties).not.toHaveProperty("access_token");
+    expect(parsed.fieldArity).toEqual({ content: "scalar" });
   });
 
   it("flags a multipart body access token without exposing it (case 301)", async () => {

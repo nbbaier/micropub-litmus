@@ -176,15 +176,24 @@ export async function parseMicropub(request: Request): Promise<ParsedMicropub> {
 }
 
 /**
- * Split a form/query source into text fields (`key → string[]`) and file parts.
+ * Split a form/query source into text fields (`key → string[]`), each field's
+ * wire arity, and file parts.
+ *
+ * Arity is decided here, while entries are still in wire order, because
+ * grouping by key loses the interleaving between spellings. PHP's `parse_str`
+ * lets the *last* occurrence decide: `category[]=a&category=b` ends up a
+ * string, `category=b&category[]=a` an array. Keyed by stripped name.
+ *
  * File parts are `File` objects (multipart uploads); rather than dropping them,
  * they are collected separately so the media slice can handle them (spec §7).
  * A `URLSearchParams` source never yields files, so `files` is empty there.
  */
 function collectFields(source: URLSearchParams | FormData): {
+  arity: Map<string, MicropubFieldArity>;
   fields: Map<string, string[]>;
   files: MicropubFilePart[];
 } {
+  const arity = new Map<string, MicropubFieldArity>();
   const fields = new Map<string, string[]>();
   const files: MicropubFilePart[] = [];
   for (const [key, value] of source.entries()) {
@@ -195,6 +204,8 @@ function collectFields(source: URLSearchParams | FormData): {
       } else {
         fields.set(key, [value]);
       }
+      const name = key.replace(ARRAY_KEY_SUFFIX, "");
+      arity.set(name, name === key ? "scalar" : "array");
     } else {
       // File part: kept out of `properties` (which stays pure text mf2) and
       // handed to the caller for media handling only for Micropub's supported
@@ -206,7 +217,7 @@ function collectFields(source: URLSearchParams | FormData): {
       }
     }
   }
-  return { fields, files };
+  return { arity, fields, files };
 }
 
 function isMediaProperty(value: string): value is MicropubMediaProperty {
@@ -220,7 +231,7 @@ function formToCanonical(source: URLSearchParams | FormData): {
   fieldArity?: Record<string, MicropubFieldArity>;
   files?: MicropubFilePart[];
 } {
-  const { fields, files } = collectFields(source);
+  const { arity, fields, files } = collectFields(source);
   const acc: FormAccumulator = {
     arity: {},
     commands: {},
@@ -228,7 +239,7 @@ function formToCanonical(source: URLSearchParams | FormData): {
     type: [],
   };
   for (const [rawKey, values] of fields) {
-    applyFormField(acc, rawKey, values);
+    applyFormField(acc, rawKey, values, arity);
   }
   const parsed: {
     accessTokenInBody?: boolean;
@@ -264,41 +275,49 @@ interface FormAccumulator extends CanonicalParts {
   arity: Record<string, MicropubFieldArity>;
 }
 
-/** Route one text field into the accumulator per the form→JSON algorithm. */
+/**
+ * Route one text field into the accumulator per the form→JSON algorithm.
+ * `wireArity` is the per-name arity `collectFields` decided in wire order.
+ */
 function applyFormField(
   acc: FormAccumulator,
   rawKey: string,
-  values: string[]
+  values: string[],
+  wireArity: Map<string, MicropubFieldArity>
 ): void {
-  if (rawKey === RESERVED_ACCESS_TOKEN) {
+  // Reserved names are matched with any `[]` stripped: PHP exposes
+  // `access_token[]=x` as `$_POST['access_token']`, so a bracketed token is
+  // still a body token and must never reach `properties` (where result
+  // fragments could echo it).
+  const key = rawKey.replace(ARRAY_KEY_SUFFIX, "");
+  if (key === RESERVED_ACCESS_TOKEN) {
     // Auth credential, never a property (spec §6). Handled by the auth path —
     // only the fact that the body carried one survives, for `case 106`/`301`.
     acc.accessTokenInBody = true;
     return;
   }
   const [firstValue] = values;
-  if (rawKey === RESERVED_H) {
+  if (key === RESERVED_H) {
     if (firstValue) {
       acc.type.push(`h-${firstValue}`);
     }
     return;
   }
-  if (rawKey === RESERVED_ACTION) {
+  if (key === RESERVED_ACTION) {
     acc.action = firstValue;
     return;
   }
-  if (rawKey === RESERVED_URL) {
+  if (key === RESERVED_URL) {
     acc.url = firstValue;
     return;
   }
 
-  // `category[]` and `category` both normalize to the `category` property; only
-  // the bracketed spelling records `array` arity. A key sent both ways
-  // (`photo=a&photo[]=b`) is an array, matching PHP's `parse_str`, where the
-  // bracketed assignment turns the entry into an array whichever order it came.
-  const key = rawKey.replace(ARRAY_KEY_SUFFIX, "");
-  if (rawKey !== key || acc.arity[key] === undefined) {
-    acc.arity[key] = rawKey === key ? "scalar" : "array";
+  // `category[]` and `category` both normalize to the `category` property. When
+  // a name was sent both ways, the last wire occurrence decided its arity (see
+  // `collectFields`); values from both spellings are still merged.
+  const arity = wireArity.get(key);
+  if (arity !== undefined) {
+    acc.arity[key] = arity;
   }
   const bucket = key.startsWith(MP_COMMAND_PREFIX)
     ? acc.commands

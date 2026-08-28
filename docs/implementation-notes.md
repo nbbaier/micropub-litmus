@@ -60,6 +60,12 @@ bottom of each section. Re-read Deviations before starting each new slice.
   sent both ways (`photo=a&photo[]=b`) is `array`, matching `parse_str`. A
   repeated bare key (`content=a&content=b`) is `scalar` with both values kept;
   PHP would keep only the last, so a validator emulating it reads the last one.
+- [§7 form field arity, mixed spellings] — CORRECTS the previous entry. A key
+  sent both ways is NOT always `array`: `parse_str` lets the *last* occurrence
+  decide (`photo=a&photo[]=b` → array, `category[]=foo&category=bar` → string),
+  so arity is now decided in `collectFields` while entries are still in wire
+  order — the grouped `Map` had lost the interleaving. Values from both
+  spellings are still merged into `canonical`.
 - [§7 access_token presence] — `access_token` stays stripped from `canonical`
   (it is auth, never content), but `ParsedMicropub.accessTokenInBody` records
   that the body carried one. `case 106`/`case 301` fail a client that sends the
@@ -124,3 +130,10 @@ bottom of each section. Re-read Deviations before starting each new slice.
   the ported validators need — field arity, `access_token` presence, and the
   JSON update payload — all three now surfaced (see Spec gaps above). 47 vitest
   unit tests; `test`, `typecheck`, `check` clean.
+- **Slice 3, review fixes (ticket #4)** — two PR review findings: (1) mixed
+  `category[]`/`category` spellings took arity from the grouped map, not wire
+  order, so `category[]=foo&category=bar` was `array` where PHP yields a
+  string; (2) `access_token[]` was not recognized as reserved and leaked into
+  `canonical.properties`. Reserved names are now matched with `[]` stripped,
+  and arity is decided in wire order (last spelling wins). 50 vitest unit
+  tests; `test`, `typecheck`, `check` clean.
