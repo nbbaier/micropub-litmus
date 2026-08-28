@@ -50,7 +50,38 @@ bottom of each section. Re-read Deviations before starting each new slice.
 - [§7 inline multipart file allowlist] — only `photo`, `video`, and `audio` file
   parts reach `ParsedMicropub.files`, matching the spec's supported inline media
   properties. Unsupported and reserved file fields are never handed to R2.
-
+- [§7 form field arity] — RESOLVES the earlier "§7 form scalar-vs-array"
+  deviation. `ParsedMicropub.fieldArity` (`Record<name, 'array' | 'scalar'>`,
+  form/multipart only) records how each field arrived on the wire, so the §8
+  validators can port `case 100` (`is_string($params['content'])`), `case 101`
+  (`is_array($params['category'])`) and `case 104` (`is_string($params[$prop])`)
+  without re-parsing `raw` — which was never viable for multipart. `canonical`
+  is unchanged: everything is still coerced to arrays per Micropub §3.3.1. A key
+  sent both ways (`photo=a&photo[]=b`) is `array`, matching `parse_str`. A
+  repeated bare key (`content=a&content=b`) is `scalar` with both values kept;
+  PHP would keep only the last, so a validator emulating it reads the last one.
+- [§7 form field arity, mixed spellings] — CORRECTS the previous entry. A key
+  sent both ways is NOT always `array`: `parse_str` lets the *last* occurrence
+  decide (`photo=a&photo[]=b` → array, `category[]=foo&category=bar` → string),
+  so arity is now decided in `collectFields` while entries are still in wire
+  order — the grouped `Map` had lost the interleaving. Values from both
+  spellings are still merged into `canonical`.
+- [§7 access_token presence] — `access_token` stays stripped from `canonical`
+  (it is auth, never content), but `ParsedMicropub.accessTokenInBody` records
+  that the body carried one. `case 106`/`case 301` fail a client that sends the
+  token in both the body and the `Authorization` header, and cannot see it
+  otherwise. The value is never surfaced — presence is all the tests read.
+- [§7 JSON update payload] — `canonical.update` carries the top-level
+  `replace`/`add`/`delete` of a JSON update request verbatim (values stay
+  `unknown`; `delete` is an object in `case 402` and an array in `case 403`).
+  Previously these were dropped, leaving `raw` as the only source for the four
+  update validators (`case 400`–`403`), each of which reports on the exact
+  malformed shape the client sent.
+- [§7 JSON content-type detection] — the original matches `application/json`
+  with `==` (exact), so a client sending `application/json; charset=utf-8` is
+  parsed as `form` and fails `_requireJSONEncoded`. We match leniently. Charset
+  parameters are legal and common, and treating them as form-encoded is a bug in
+  the original, not a behavior worth porting.
 - [§4 SSE dead-subscriber reaping] — spec sketch says "drop writers that
   throw"; nothing throws (see Discovered unknowns), so `push()` races each
   write against a 10s timeout and drops the writer on timeout OR error.
@@ -127,7 +158,22 @@ bottom of each section. Re-read Deviations before starting each new slice.
   (files deferred to media handling), and content-type detection incl. the
   form fallback. `bun run test` (25 pass), `typecheck`, `check` all clean.
   Files: `src/micropub.ts`, `src/micropub.test.ts`, `package.json` (test script
-  + vitest devDep). Note: slice 2 (SSE) not yet in this branch's history.
+  + vitest devDep). Slice 2 (SSE) landed on `main` afterwards; see below.
+- **Slice 3, second pass (ticket #4)** — re-read the original against the three
+  formats now that `lib/helpers.php` was fetched directly: it holds no
+  normalization at all (only `mf2_val`, a display helper that unwraps the
+  `photo` alt-text object form), confirming the earlier source-reading note.
+  The re-read found three wire-level facts canonicalization was erasing that
+  the ported validators need — field arity, `access_token` presence, and the
+  JSON update payload — all three now surfaced (see Spec gaps above). 47 vitest
+  unit tests; `test`, `typecheck`, `check` clean.
+- **Slice 3, review fixes (ticket #4)** — two PR review findings: (1) mixed
+  `category[]`/`category` spellings took arity from the grouped map, not wire
+  order, so `category[]=foo&category=bar` was `array` where PHP yields a
+  string; (2) `access_token[]` was not recognized as reserved and leaked into
+  `canonical.properties`. Reserved names are now matched with `[]` stripped,
+  and arity is decided in wire order (last spelling wins). 50 vitest unit
+  tests; `test`, `typecheck`, `check` clean.
 - **Slice 2 (spec §12.2, §4, §9, ticket #3)** — SSE fan-out in the DO. `GET
   /sub` returns a `text/event-stream` backed by a `TransformStream`; writers are
   retained in an instance `Set` across requests; `publish()` frames the §9
@@ -142,6 +188,9 @@ bottom of each section. Re-read Deviations before starting each new slice.
   sequential connect/disconnect cycles keep `subscribers` at 1 (reaping works);
   bad channel → 400, unknown session → 404; and headless Chromium over CDP shows
   `#result` advancing tick 45 → 48 with the debug pane filled. `bun run test`
-  (40 pass, 15 new SSE-framing tests), `typecheck`, `check` clean. Files:
+  (9 new SSE-framing tests), `typecheck`, `check` clean. Files:
   `src/sse.ts`, `src/sse.test.ts`, `src/session.ts`, `src/index.ts`,
   `src/types.ts`.
+- **Merge: `main` (slice 2) into the ticket #4 branch** — slices 2 and 3 now
+  coexist; no conflicts in code or in this log. 59 vitest unit tests (50
+  `micropub`, 9 `sse`); `test`, `typecheck`, `check` clean.
