@@ -14,7 +14,7 @@ Uses the **canonical** five-role vocabulary (`needs-triage`, `needs-info`, `read
 
 ### Domain docs
 
-**Single-context**: one `CONTEXT.md` + `docs/adr/` at the repo root. The build also keeps an append-only `docs/implementation-notes.md` running log that feeds ADRs. See `docs/agents/domain.md`.
+**Single-context**: one `GLOSSARY.md` + `docs/adr/` at the repo root. The build also keeps an append-only `docs/implementation-notes.md` running log that feeds ADRs. See `docs/agents/domain.md`.
 
 ### Build tracking
 

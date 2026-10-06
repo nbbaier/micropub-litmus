@@ -2,21 +2,21 @@
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 
-This is a **single-context** repo: one `CONTEXT.md` + `docs/adr/` at the repo root. Alongside those durable docs, the build keeps an append-only `docs/implementation-notes.md` running log — see "The running log vs. ADRs" below for how the two blend.
+This is a **single-context** repo: one `GLOSSARY.md` + `docs/adr/` at the repo root. Alongside those durable docs, the build keeps an append-only `docs/implementation-notes.md` running log — see "The running log vs. ADRs" below for how the two blend.
 
 ## Before exploring, read these
 
-- **`CONTEXT.md`** at the repo root (the glossary / ubiquitous language), if it exists.
+- **`GLOSSARY.md`** at the repo root (the glossary / ubiquitous language).
 - **`docs/adr/`** — read ADRs that touch the area you're about to work in.
 - **`docs/implementation-notes.md`** — the in-flight build log. Skim the **Deviations** and **Spec gaps** sections before working in an area; they record where the code intentionally diverges from `docs/spec.md`.
 
-If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates `CONTEXT.md` and ADRs lazily when terms or decisions actually get resolved.
+If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates `GLOSSARY.md` and ADRs lazily when terms or decisions actually get resolved.
 
 ## File structure
 
 ```
 /
-├── CONTEXT.md                     ← domain glossary (created lazily)
+├── GLOSSARY.md                    ← domain glossary (created lazily)
 ├── docs/
 │   ├── spec.md                    ← the build spec (source of intended behavior)
 │   ├── implementation-notes.md    ← append-only build log (Deviations / Spec gaps / Discovered unknowns)
@@ -51,7 +51,7 @@ At each milestone, re-read the **Deviations** section before starting the next s
 
 ## Use the glossary's vocabulary
 
-When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `CONTEXT.md`. Don't drift to synonyms the glossary explicitly avoids.
+When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `GLOSSARY.md`. Don't drift to synonyms the glossary explicitly avoids.
 
 If the concept you need isn't in the glossary yet, that's a signal — either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).
 
